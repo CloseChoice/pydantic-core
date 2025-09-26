@@ -255,3 +255,99 @@ def test_json_dict_complex_key():
     assert v.validate_json('{"1+2j": 2, "infj": 4}') == {complex(1, 2): 2, complex(0, float('inf')): 4}
     with pytest.raises(ValidationError, match='Input should be a valid complex string'):
         v.validate_json('{"1+2j": 2, "": 4}') == {complex(1, 2): 2, complex(0, float('inf')): 4}
+
+
+def test_ordered_dict_key_order_preservation():
+    """Test that OrderedDict key ordering is preserved during validation.
+
+    This test addresses GitHub issue #12273 where OrderedDict key ordering
+    was not preserved when validating with Pydantic V2.
+    """
+    # Test with simple string keys and int values
+    v = SchemaValidator(cs.dict_schema(keys_schema=cs.str_schema(), values_schema=cs.int_schema()))
+
+    # Test case from original issue
+    foo = OrderedDict({"a": 1, "b": 2})
+    foo.move_to_end("a")  # Order should now be: ['b', 'a']
+
+    result = v.validate_python(foo)
+    assert list(result.keys()) == list(foo.keys()) == ['b', 'a']
+    assert result == {'b': 2, 'a': 1}
+
+    # Test with more complex reordering
+    foo2 = OrderedDict({"x": 1, "y": 2, "z": 3})
+    foo2.move_to_end("x")  # Order should be: ['y', 'z', 'x']
+
+    result2 = v.validate_python(foo2)
+    assert list(result2.keys()) == list(foo2.keys()) == ['y', 'z', 'x']
+    assert result2 == {'y': 2, 'z': 3, 'x': 1}
+
+    # Test popitem and re-insertion
+    foo3 = OrderedDict({"p": 1, "q": 2})
+    item = foo3.popitem(last=False)  # Remove first item ('p', 1)
+    foo3[item[0]] = item[1]  # Re-insert at end: ['q', 'p']
+
+    result3 = v.validate_python(foo3)
+    assert list(result3.keys()) == list(foo3.keys()) == ['q', 'p']
+    assert result3 == {'q': 2, 'p': 1}
+
+
+def test_ordered_dict_with_different_value_types():
+    """Test OrderedDict ordering with different value types."""
+    v = SchemaValidator(cs.dict_schema(keys_schema=cs.str_schema(), values_schema=cs.any_schema()))
+
+    foo = OrderedDict([("first", "string"), ("second", 42), ("third", [1, 2, 3])])
+    foo.move_to_end("first")  # Order: ['second', 'third', 'first']
+
+    result = v.validate_python(foo)
+    assert list(result.keys()) == list(foo.keys()) == ['second', 'third', 'first']
+    assert result == {'second': 42, 'third': [1, 2, 3], 'first': 'string'}
+
+
+def test_ordered_dict_vs_regular_dict():
+    """Test that regular dict behavior is unchanged."""
+    v = SchemaValidator(cs.dict_schema(keys_schema=cs.str_schema(), values_schema=cs.int_schema()))
+
+    # Regular dict - order may or may not be preserved (implementation dependent for older Python)
+    regular_dict = {"a": 1, "b": 2}
+    result_regular = v.validate_python(regular_dict)
+    assert result_regular == regular_dict
+
+    # OrderedDict - order must be preserved
+    ordered_dict = OrderedDict({"a": 1, "b": 2})
+    ordered_dict.move_to_end("a")
+    result_ordered = v.validate_python(ordered_dict)
+    assert list(result_ordered.keys()) == list(ordered_dict.keys()) == ['b', 'a']
+
+
+def test_ordered_dict_original_issue_case():
+    """Test exact case from GitHub issue #12273.
+
+    This reproduces the exact code that was failing in the original issue report.
+    """
+    # Create validator that accepts OrderedDict[str, int]
+    v = SchemaValidator(cs.dict_schema(keys_schema=cs.str_schema(), values_schema=cs.int_schema()))
+
+    # Reproduce the exact issue scenario
+    foo = OrderedDict({"a": 1, "b": 2})
+    foo.move_to_end("a")
+
+    # This should work now (was failing before the fix)
+    model1_result = v.validate_python(foo)
+
+    # This always worked (using dict() constructor preserves order)
+    model2_result = v.validate_python(dict(foo))
+
+    # Both should preserve the same order and have the same content
+    expected_keys = ['b', 'a']
+    expected_dict = {'b': 2, 'a': 1}
+
+    assert list(foo.keys()) == expected_keys
+    assert list(model1_result.keys()) == expected_keys  # This was failing before
+    assert list(model2_result.keys()) == expected_keys
+
+    assert model1_result == expected_dict
+    assert model2_result == expected_dict
+
+    # All three should have the same key order
+    assert list(foo.keys()) == list(model1_result.keys()) == list(model2_result.keys())

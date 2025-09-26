@@ -1,10 +1,9 @@
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyDict, PyType};
+use pyo3::types::PyDict;
 
 use crate::build_tools::is_strict;
-use crate::errors::{ErrorType, LocItem, ValError, ValLineError, ValResult};
+use crate::errors::{LocItem, ValError, ValLineError, ValResult};
 use crate::input::BorrowInput;
 use crate::input::ConsumeIterator;
 use crate::input::{Input, ValidatedDict};
@@ -12,21 +11,9 @@ use crate::input::{Input, ValidatedDict};
 use crate::tools::SchemaDict;
 
 use super::any::AnyValidator;
+use super::list::length_check;
 use super::{build_validator, BuildValidator, CombinedValidator, DefinitionsBuilder, ValidationState, Validator};
 
-static ORDERED_DICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
-
-pub fn get_ordered_dict_type(py: Python<'_>) -> &Bound<'_, PyType> {
-    ORDERED_DICT_TYPE
-        .get_or_init(py, || {
-            py.import("collections")
-                .and_then(|collections_module| collections_module.getattr("OrderedDict"))
-                .unwrap()
-                .extract()
-                .unwrap()
-        })
-        .bind(py)
-}
 
 #[derive(Debug)]
 pub struct DictValidator {
@@ -121,21 +108,8 @@ where
 {
     type Output = ValResult<Py<PyAny>>;
     fn consume_iterator(self, iterator: impl Iterator<Item = ValResult<(Key, Value)>>) -> ValResult<Py<PyAny>> {
-        // Check if input was an OrderedDict and preserve the type
-        let is_ordered_dict = if let Some(py_input) = self.input.as_python() {
-            let ordered_dict_type = get_ordered_dict_type(self.py);
-            py_input.is_instance(ordered_dict_type).unwrap_or(false)
-        } else {
-            false
-        };
-
-        let output: Bound<PyAny> = if is_ordered_dict {
-            // Create OrderedDict() - call the constructor with empty args
-            let ordered_dict_type = get_ordered_dict_type(self.py);
-            ordered_dict_type.call0()?.into_any()
-        } else {
-            PyDict::new(self.py).into_any()
-        };
+        // Always create a regular PyDict - PyMapping iteration preserves order
+        let output = PyDict::new(self.py);
 
         let mut errors: Vec<ValLineError> = Vec::new();
         let allow_partial = self.state.allow_partial;
@@ -177,37 +151,8 @@ where
 
         if errors.is_empty() {
             let input = self.input;
-            // Manual length check since we have Bound<PyAny> instead of PyDict
-            let mut op_actual_length: Option<usize> = None;
-            if let Some(min_length) = self.min_length {
-                let actual_length = output.len()?;
-                if actual_length < min_length {
-                    return Err(ValError::new(
-                        ErrorType::TooShort {
-                            field_type: "Dictionary".to_string(),
-                            min_length,
-                            actual_length,
-                            context: None,
-                        },
-                        input,
-                    ));
-                }
-                op_actual_length = Some(actual_length);
-            }
-            if let Some(max_length) = self.max_length {
-                let actual_length = op_actual_length.unwrap_or_else(|| output.len().unwrap_or(0));
-                if actual_length > max_length {
-                    return Err(ValError::new(
-                        ErrorType::TooLong {
-                            field_type: "Dictionary".to_string(),
-                            max_length,
-                            actual_length: Some(actual_length),
-                            context: None,
-                        },
-                        input,
-                    ));
-                }
-            }
+            // Use the original length_check macro since we have PyDict again
+            length_check!(input, "Dictionary", self.min_length, self.max_length, output);
             Ok(output.into())
         } else {
             Err(ValError::LineErrors(errors))

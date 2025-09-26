@@ -43,6 +43,88 @@ pub use validators::{PySome, SchemaValidator};
 
 use crate::input::Input;
 
+// TODO: REMOVE THIS TEST FUNCTION BEFORE PRODUCTION
+/// Test function to examine how Rust iterates over Python OrderedDict
+/// and create new dictionaries with different approaches
+#[pyfunction]
+pub fn test_ordered_dict_iteration(py: Python, obj: &Bound<PyAny>) -> PyResult<Py<PyAny>> {
+    use pyo3::types::{PyDict, PyMapping, PyTuple};
+
+    let result_dict = PyDict::new(py);
+
+    // Add type information
+    result_dict.set_item("input_type", obj.get_type().name()?)?;
+
+    // Test 1: Create PyDict from PyDict iteration (loses order for OrderedDict)
+    if let Ok(dict) = obj.downcast::<PyDict>() {
+        let pydict_from_pydict = PyDict::new(py);
+        let mut pydict_keys = Vec::new();
+
+        for (i, (key, value)) in dict.iter().enumerate() {
+            pydict_from_pydict.set_item(&key, &value)?;
+            pydict_keys.push(format!("{}:{}", i, key.repr()?));
+        }
+
+        result_dict.set_item("pydict_from_pydict_iteration", pydict_from_pydict)?;
+        result_dict.set_item("pydict_iteration_order", pydict_keys)?;
+    }
+
+    // Test 2: Create PyDict from PyMapping iteration (preserves order)
+    if let Ok(mapping) = obj.downcast::<PyMapping>() {
+        let pydict_from_mapping = PyDict::new(py);
+        let mut mapping_keys = Vec::new();
+
+        let items = mapping.items()?;
+        for (i, item) in items.iter().enumerate() {
+            let tuple = item.downcast::<PyTuple>()?;
+            let key = tuple.get_item(0)?;
+            let value = tuple.get_item(1)?;
+            pydict_from_mapping.set_item(&key, &value)?;
+            mapping_keys.push(format!("{}:{}", i, key.repr()?));
+        }
+
+        result_dict.set_item("pydict_from_mapping_iteration", pydict_from_mapping)?;
+        result_dict.set_item("mapping_iteration_order", mapping_keys)?;
+    }
+
+    // Test 3: Create OrderedDict from PyMapping iteration
+    if let Ok(mapping) = obj.downcast::<PyMapping>() {
+        let collections = py.import("collections")?;
+        let ordered_dict_type = collections.getattr("OrderedDict")?;
+        let ordered_dict_from_mapping = ordered_dict_type.call0()?;
+        let mut ordered_keys = Vec::new();
+
+        let items = mapping.items()?;
+        for (i, item) in items.iter().enumerate() {
+            let tuple = item.downcast::<PyTuple>()?;
+            let key = tuple.get_item(0)?;
+            let value = tuple.get_item(1)?;
+            ordered_dict_from_mapping.call_method1("__setitem__", (&key, &value))?;
+            ordered_keys.push(format!("{}:{}", i, key.repr()?));
+        }
+
+        result_dict.set_item("ordereddict_from_mapping_iteration", ordered_dict_from_mapping)?;
+        result_dict.set_item("ordereddict_iteration_order", ordered_keys)?;
+    }
+
+    // Test 4: Check if it's OrderedDict specifically
+    let collections = py.import("collections")?;
+    let ordered_dict_type = collections.getattr("OrderedDict")?;
+    result_dict.set_item("is_ordered_dict", obj.is_instance(&ordered_dict_type)?)?;
+
+    // Test 5: Original keys order
+    if let Ok(keys) = obj.call_method0("keys") {
+        let mut original_keys = Vec::new();
+        for (i, key) in keys.try_iter()?.enumerate() {
+            let key = key?;
+            original_keys.push(format!("{}:{}", i, key.repr()?));
+        }
+        result_dict.set_item("original_keys_order", original_keys)?;
+    }
+
+    Ok(result_dict.into())
+}
+
 #[pyfunction(signature = (data, *, allow_inf_nan=true, cache_strings=StringCacheMode::All, allow_partial=PartialMode::Off))]
 pub fn from_json<'py>(
     py: Python<'py>,
@@ -113,7 +195,7 @@ mod _pydantic_core {
 
     #[pymodule_export]
     use crate::{
-        from_json, list_all_errors, to_json, to_jsonable_python, ArgsKwargs, PyMultiHostUrl, PySome, PyUrl,
+        from_json, list_all_errors, test_ordered_dict_iteration, to_json, to_jsonable_python, ArgsKwargs, PyMultiHostUrl, PySome, PyUrl,
         PydanticCustomError, PydanticKnownError, PydanticOmit, PydanticSerializationError,
         PydanticSerializationUnexpectedValue, PydanticUndefinedType, PydanticUseDefault, SchemaError, SchemaSerializer,
         SchemaValidator, TzInfo, ValidationError,

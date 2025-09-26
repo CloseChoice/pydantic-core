@@ -48,6 +48,20 @@ use super::{
     Input,
 };
 
+static ORDERED_DICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+fn get_ordered_dict_type(py: Python<'_>) -> &Bound<'_, PyType> {
+    ORDERED_DICT_TYPE
+        .get_or_init(py, || {
+            py.import("collections")
+                .and_then(|collections_module| collections_module.getattr("OrderedDict"))
+                .unwrap()
+                .extract()
+                .unwrap()
+        })
+        .bind(py)
+}
+
 static FRACTION_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 pub fn get_fraction_type(py: Python<'_>) -> &Bound<'_, PyType> {
@@ -400,7 +414,7 @@ impl<'py> Input<'py> for Bound<'py, PyAny> {
 
     fn lax_dict<'a>(&'a self) -> ValResult<GenericPyMapping<'a, 'py>> {
         // Check if this is OrderedDict first - don't downcast to PyDict as it loses order
-        let ordered_dict_type = crate::validators::dict::get_ordered_dict_type(self.py());
+        let ordered_dict_type = get_ordered_dict_type(self.py());
         if self.is_instance(ordered_dict_type).unwrap_or(false) {
             if let Ok(mapping) = self.downcast::<PyMapping>() {
                 return Ok(GenericPyMapping::Mapping(mapping));
