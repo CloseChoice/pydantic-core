@@ -34,7 +34,7 @@ mod date;
 mod datetime;
 pub(crate) mod decimal;
 mod definitions;
-mod dict;
+pub(crate) mod dict;
 mod enum_;
 mod float;
 mod frozenset;

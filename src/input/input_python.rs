@@ -399,6 +399,14 @@ impl<'py> Input<'py> for Bound<'py, PyAny> {
     }
 
     fn lax_dict<'a>(&'a self) -> ValResult<GenericPyMapping<'a, 'py>> {
+        // Check if this is OrderedDict first - don't downcast to PyDict as it loses order
+        let ordered_dict_type = crate::validators::dict::get_ordered_dict_type(self.py());
+        if self.is_instance(ordered_dict_type).unwrap_or(false) {
+            if let Ok(mapping) = self.downcast::<PyMapping>() {
+                return Ok(GenericPyMapping::Mapping(mapping));
+            }
+        }
+
         if let Ok(dict) = self.downcast::<PyDict>() {
             Ok(GenericPyMapping::Dict(dict))
         } else if let Ok(mapping) = self.downcast::<PyMapping>() {
